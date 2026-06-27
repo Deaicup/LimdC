@@ -1,30 +1,65 @@
-#include [C++] \\导入C++语法
-#include [C] \\导入C语法
-#include [C]<stdio.h> \\导入C中的库
-#include [C++]<bits/stdc++.h> \\导入C++中的库
+#include [C++] 
+#include [C]
+#include [C]<stdio.h>
+#include [C++]<bits/stdc++.h>
 
-fn main(){ \\主函数
+fn main(){ 
     new mainwindow=window{
-        .title="title"
-        .h=500
-        .w=300
+        .title="LimdC List Test"
+        .h=420
+        .w=520
     }
 
-    new button of mainwindow=firstbutton{\
-        //长宽
-        .h=100
-        .w=250
-        //位置
-        .x=10
-        .y=5
-        .text="A button"
-        .color of button=#FE10EF
-        .color of text=#000000
-        .click=click()
-        .corner=circle //圆角边框，方：.corner=square
+    new list of mainwindow=testList{
+        .title="List Card"
+        .title color=#1E3A8A
+        .x=70
+        .y=45
+        .aw=320
+        .ah=58
+        .padding=16
+        .background color=#F8FAFC
+        new button of * = listButtonA{
+            .text="List Item A"
+            .color of button=#0F172A
+            .color of text=#E0F2FE
+            .click=click()
+            .corner=circle
+        }
+        new button of * = listButtonB{
+            .text="List Item B"
+            .color of button=#1E293B
+            .color of text=#BBF7D0
+            .click=click()
+            .corner=circle
+        }
+        .frame=true
+        .frame color=#CBD5E1
     }
+
+    new button of testList=listButtonC{
+        .text="List Item C"
+        .color of button=#F59E0B
+        .color of text=#FFFFFF
+        .click=click()
+        .corner=circle
+    }
+    string txt = "hallo";
+    new text=text1{
+        .x=70
+        .y=310
+        .w=320
+        .h=40
+        .text=printf(txt) // or .text=cout<<txt
+        .color=#FFFFFF
+        .size=18
+        .background color=#111827
+        .center=0
+    }
+
     return 0;
 }
+
 fn click(){
-    firstbutton.'color of text'=#01FE01; //因为color of button中间有空格所以要加单引号
+    listButtonA.'color of text'=#FFEE58;
 }

@@ -46,6 +46,34 @@ struct ButtonSpec {
     std::string clickHandler;
 };
 
+struct ListSpec {
+    std::string parent;
+    std::string name;
+    std::string title;
+    std::string titleColor = "#111827";
+    bool frame = false;
+    std::string frameColor = "#D1D5DB";
+    std::string backgroundColor = "#F9FAFB";
+    int padding = 12;
+    int x = 0;
+    int y = 0;
+    int itemWidth = 80;
+    int itemHeight = 25;
+};
+
+struct TextSpec {
+    std::string name;
+    std::string textExpression = "\"Text\"";
+    int x = 70;
+    int y = 315;
+    int width = 320;
+    int height = 32;
+    std::string textColor = "#000000";
+    std::string backgroundColor = "#FFFFFF";
+    int size = 14;
+    bool center = false;
+};
+
 struct UiAction {
     std::string objectName;
     std::string property;
@@ -60,7 +88,9 @@ struct FunctionSpec {
 struct ProgramSpec {
     IncludeInfo includes;
     std::optional<WindowSpec> window;
+    std::vector<ListSpec> lists;
     std::vector<ButtonSpec> buttons;
+    std::vector<TextSpec> texts;
     std::vector<FunctionSpec> functions;
     std::vector<std::string> nativeStatements;
     int returnCode = 0;
@@ -229,6 +259,17 @@ static int parseInteger(const CleanLine& line, const std::string& value, const s
     }
 }
 
+static bool parseBoolean(const CleanLine& line, std::string value, const std::string& field) {
+    value = trim(std::move(value));
+    if (value == "true") {
+        return true;
+    }
+    if (value == "false") {
+        return false;
+    }
+    throw lineError(line, field + " 只能是 true 或 false");
+}
+
 static std::string parseColor(const CleanLine& line, std::string value) {
     value = trim(std::move(value));
     static const std::regex colorPattern(R"(^#[0-9a-fA-F]{6}$)");
@@ -256,11 +297,63 @@ static std::string parseCallName(const CleanLine& line, std::string value) {
     return match[1].str();
 }
 
+static bool isListPropertyLine(const std::string& text) {
+    static const std::regex propertyPattern(R"(^\.(title|title\s+color|x|y|aw|ah|frame|frame\s+color|background\s+color|padding)\s*=\s*.+$)");
+    return std::regex_match(text, propertyPattern);
+}
+
+static std::vector<std::pair<CleanLine, std::smatch>> parsePropertyBlock(
+    const std::vector<CleanLine>& lines,
+    std::size_t& index
+);
+
+static ButtonSpec makeButton(const std::string& parent, const std::vector<std::pair<CleanLine, std::smatch>>& properties);
+
+static std::vector<std::pair<CleanLine, std::smatch>> parseListPropertyBlock(
+    const std::vector<CleanLine>& lines,
+    std::size_t& index,
+    std::vector<ButtonSpec>& buttons,
+    const std::string& listName,
+    int itemWidth,
+    int itemHeight
+) {
+    static const std::regex propertyPattern(R"(^\.([A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)?)(?:\s+of\s+([A-Za-z_]\w*))?\s*=\s*(.+)$)");
+    static const std::regex childButtonPattern(R"(^new\s+button\s+of\s+\*\s*=\s*([A-Za-z_]\w*)\s*\{\s*$)");
+    std::vector<std::pair<CleanLine, std::smatch>> properties;
+
+    for (++index; index < lines.size(); ++index) {
+        const CleanLine& line = lines[index];
+        if (line.text == "}") {
+            return properties;
+        }
+
+        std::smatch match;
+        if (std::regex_match(line.text, match, childButtonPattern)) {
+            const auto childProperties = parsePropertyBlock(lines, index);
+            ButtonSpec button = makeButton(listName, childProperties);
+            button.name = match[1].str();
+            button.width = itemWidth;
+            button.height = itemHeight;
+            button.x = 0;
+            button.y = 0;
+            buttons.push_back(button);
+            continue;
+        }
+
+        if (!std::regex_match(line.text, match, propertyPattern)) {
+            throw lineError(line, "无法解析 list 属性语句: " + line.text);
+        }
+        properties.push_back({line, match});
+    }
+
+    throw std::runtime_error("list 对象块缺少结束的 }");
+}
+
 static std::vector<std::pair<CleanLine, std::smatch>> parsePropertyBlock(
     const std::vector<CleanLine>& lines,
     std::size_t& index
 ) {
-    static const std::regex propertyPattern(R"(^\.([A-Za-z_]\w*)(?:\s+of\s+([A-Za-z_]\w*))?\s*=\s*(.+)$)");
+    static const std::regex propertyPattern(R"(^\.([A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)?)(?:\s+of\s+([A-Za-z_]\w*))?\s*=\s*(.+)$)");
     std::vector<std::pair<CleanLine, std::smatch>> properties;
 
     for (++index; index < lines.size(); ++index) {
@@ -311,6 +404,61 @@ static WindowSpec makeWindow(const CleanLine& line, const std::string& name, con
     return window;
 }
 
+static ListSpec makeList(
+    const CleanLine& line,
+    const std::string& parent,
+    const std::string& name,
+    const std::vector<std::pair<CleanLine, std::smatch>>& properties
+) {
+    ListSpec list;
+    list.parent = parent;
+    list.name = name;
+
+    for (const auto& item : properties) {
+        const CleanLine& propertyLine = item.first;
+        const std::smatch& match = item.second;
+        const std::string key = match[1].str();
+        const std::string target = match[2].matched ? match[2].str() : "";
+        const std::string value = trim(match[3].str());
+
+        if (!target.empty()) {
+            throw lineError(propertyLine, "list 属性不支持 of 目标");
+        }
+        if (key == "title") {
+            list.title = unquote(value);
+        } else if (key == "title color") {
+            list.titleColor = parseColor(propertyLine, value);
+        } else if (key == "frame") {
+            list.frame = parseBoolean(propertyLine, value, ".frame");
+        } else if (key == "frame color") {
+            list.frameColor = parseColor(propertyLine, value);
+        } else if (key == "background color") {
+            list.backgroundColor = parseColor(propertyLine, value);
+        } else if (key == "padding") {
+            list.padding = parseInteger(propertyLine, value, ".padding");
+        } else if (key == "x") {
+            list.x = parseInteger(propertyLine, value, ".x");
+        } else if (key == "y") {
+            list.y = parseInteger(propertyLine, value, ".y");
+        } else if (key == "aw") {
+            list.itemWidth = parseInteger(propertyLine, value, ".aw");
+        } else if (key == "ah") {
+            list.itemHeight = parseInteger(propertyLine, value, ".ah");
+        } else {
+            throw lineError(propertyLine, "未知 list 属性: " + key);
+        }
+    }
+
+    if (list.itemWidth <= 0 || list.itemHeight <= 0) {
+        throw lineError(line, "list 的 .aw 和 .ah 必须大于 0");
+    }
+    if (list.padding < 0) {
+        throw lineError(line, "list 的 .padding 不能小于 0");
+    }
+
+    return list;
+}
+
 static ButtonSpec makeButton(const std::string& parent, const std::vector<std::pair<CleanLine, std::smatch>>& properties) {
     ButtonSpec button;
     button.parent = parent;
@@ -350,6 +498,74 @@ static ButtonSpec makeButton(const std::string& parent, const std::vector<std::p
     }
 
     return button;
+}
+
+static std::string cppStringLiteral(const std::string& value);
+
+static std::string parseTextExpression(const CleanLine& line, std::string value) {
+    value = trim(std::move(value));
+    std::smatch match;
+    if (std::regex_match(value, match, std::regex(R"(^printf\s*\(\s*([A-Za-z_]\w*)\s*\)\s*;?\s*$)"))) {
+        return match[1].str();
+    }
+    if (std::regex_match(value, match, std::regex(R"(^cout\s*<<\s*([A-Za-z_]\w*)\s*;?\s*$)"))) {
+        return match[1].str();
+    }
+    if (value.size() >= 2 && ((value.front() == '"' && value.back() == '"') || (value.front() == '\'' && value.back() == '\''))) {
+        return cppStringLiteral(unquote(value));
+    }
+    if (std::regex_match(value, std::regex(R"(^[A-Za-z_]\w*$)"))) {
+        return value;
+    }
+    throw lineError(line, ".text 需要字符串、变量名、printf(var) 或 cout<<var");
+}
+
+static TextSpec makeText(const CleanLine& line, const std::string& name, const std::vector<std::pair<CleanLine, std::smatch>>& properties) {
+    TextSpec text;
+    text.name = name;
+
+    for (const auto& item : properties) {
+        const CleanLine& propertyLine = item.first;
+        const std::smatch& match = item.second;
+        const std::string key = match[1].str();
+        const std::string target = match[2].matched ? match[2].str() : "";
+        const std::string value = trim(match[3].str());
+
+        if (!target.empty()) {
+            throw lineError(propertyLine, "text 属性不支持 of 目标");
+        }
+        if (key == "text") {
+            text.textExpression = parseTextExpression(propertyLine, value);
+        } else if (key == "color") {
+            text.textColor = parseColor(propertyLine, value);
+        } else if (key == "background color") {
+            text.backgroundColor = parseColor(propertyLine, value);
+        } else if (key == "size") {
+            text.size = parseInteger(propertyLine, value, ".size");
+        } else if (key == "center") {
+            const int center = parseInteger(propertyLine, value, ".center");
+            if (center != 0 && center != 1) {
+                throw lineError(propertyLine, ".center 只能是 0 或 1");
+            }
+            text.center = center == 1;
+        } else if (key == "x") {
+            text.x = parseInteger(propertyLine, value, ".x");
+        } else if (key == "y") {
+            text.y = parseInteger(propertyLine, value, ".y");
+        } else if (key == "w") {
+            text.width = parseInteger(propertyLine, value, ".w");
+        } else if (key == "h") {
+            text.height = parseInteger(propertyLine, value, ".h");
+        } else {
+            throw lineError(propertyLine, "未知 text 属性: " + key);
+        }
+    }
+
+    if (text.size <= 0 || text.width <= 0 || text.height <= 0) {
+        throw lineError(line, "text 的 .size/.w/.h 必须大于 0");
+    }
+
+    return text;
 }
 
 static void applyUiAction(ButtonSpec& button, const UiAction& action) {
@@ -422,7 +638,9 @@ static ProgramSpec parseProgram(const std::string& source) {
     }
 
     static const std::regex windowPattern(R"(^new\s+([A-Za-z_]\w*)\s*=\s*window\s*\{\s*$)");
+    static const std::regex listPattern(R"(^new\s+list\s+of\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*\{\s*$)");
     static const std::regex buttonPattern(R"(^new\s+button\s+of\s+([A-Za-z_]\w*)\s*(?:=\s*([A-Za-z_]\w*))?\s*\{\s*$)");
+    static const std::regex textPattern(R"(^new\s+text\s*=\s*([A-Za-z_]\w*)\s*\{\s*$)");
     static const std::regex returnPattern(R"(^return\s+(-?\d+)\s*;?\s*$)");
 
     bool foundMainEnd = false;
@@ -446,12 +664,53 @@ static ProgramSpec parseProgram(const std::string& source) {
             continue;
         }
 
+        if (std::regex_match(line.text, match, listPattern)) {
+            const std::string parent = match[1].str();
+            const std::string name = match[2].str();
+            int listX = 0;
+            int listY = 0;
+            int itemWidth = 80;
+            int itemHeight = 25;
+            std::size_t scan = i + 1;
+            for (; scan < bodyLines.size(); ++scan) {
+                if (bodyLines[scan].text == "}" || startsWith(bodyLines[scan].text, "new ")) {
+                    break;
+                }
+                if (!isListPropertyLine(bodyLines[scan].text)) {
+                    break;
+                }
+                std::smatch propertyMatch;
+                std::regex_match(bodyLines[scan].text, propertyMatch, std::regex(R"(^\.([A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)?)\s*=\s*(.+)$)"));
+                const std::string key = propertyMatch[1].str();
+                const std::string value = propertyMatch[2].str();
+                if (key == "x") {
+                    listX = parseInteger(bodyLines[scan], value, ".x");
+                } else if (key == "y") {
+                    listY = parseInteger(bodyLines[scan], value, ".y");
+                } else if (key == "aw") {
+                    itemWidth = parseInteger(bodyLines[scan], value, ".aw");
+                } else if (key == "ah") {
+                    itemHeight = parseInteger(bodyLines[scan], value, ".ah");
+                }
+            }
+            const auto properties = parseListPropertyBlock(bodyLines, i, program.buttons, name, itemWidth, itemHeight);
+            ListSpec list = makeList(line, parent, name, properties);
+            program.lists.push_back(list);
+            continue;
+        }
+
         if (std::regex_match(line.text, match, buttonPattern)) {
             const std::string parent = match[1].str();
             const auto properties = parsePropertyBlock(bodyLines, i);
             ButtonSpec button = makeButton(parent, properties);
             button.name = match[2].matched ? match[2].str() : "button" + std::to_string(program.buttons.size());
             program.buttons.push_back(button);
+            continue;
+        }
+
+        if (std::regex_match(line.text, match, textPattern)) {
+            const auto properties = parsePropertyBlock(bodyLines, i);
+            program.texts.push_back(makeText(line, match[1].str(), properties));
             continue;
         }
 
@@ -484,11 +743,37 @@ static ProgramSpec parseProgram(const std::string& source) {
     if (!program.buttons.empty() && !program.window.has_value()) {
         throw std::runtime_error("button 需要先定义父 window");
     }
+    if (!program.texts.empty() && !program.window.has_value()) {
+        throw std::runtime_error("text 需要先定义 window");
+    }
 
     if (program.window.has_value()) {
+        for (const ListSpec& list : program.lists) {
+            if (list.parent != program.window->name) {
+                throw std::runtime_error("list 的父窗口未定义: " + list.parent);
+            }
+        }
+
+        for (const ListSpec& list : program.lists) {
+            int itemIndex = 0;
+            for (ButtonSpec& button : program.buttons) {
+                if (button.parent == list.name) {
+                    button.x = 0;
+                    button.y = itemIndex * list.itemHeight;
+                    button.width = list.itemWidth;
+                    button.height = list.itemHeight;
+                    ++itemIndex;
+                }
+            }
+        }
+
         for (const ButtonSpec& button : program.buttons) {
-            if (button.parent != program.window->name) {
-                throw std::runtime_error("button 的父窗口未定义: " + button.parent);
+            const bool parentIsWindow = button.parent == program.window->name;
+            const bool parentIsList = std::any_of(program.lists.begin(), program.lists.end(), [&](const ListSpec& list) {
+                return button.parent == list.name;
+            });
+            if (!parentIsWindow && !parentIsList) {
+                throw std::runtime_error("button 的父对象未定义: " + button.parent);
             }
         }
     }
@@ -545,6 +830,15 @@ static std::string colorToRgbCall(const std::string& color) {
     return "RGB(" + std::to_string(r) + ", " + std::to_string(g) + ", " + std::to_string(b) + ")";
 }
 
+static std::string parentExpression(const ProgramSpec& program, const ButtonSpec& button) {
+    for (const ListSpec& list : program.lists) {
+        if (button.parent == list.name) {
+            return list.parent;
+        }
+    }
+    return button.parent;
+}
+
 static int autoButtonFontSize(const ButtonSpec& button) {
     const int heightSize = std::max(5, (button.height * 2) / 5);
     const int textLength = std::max(1, static_cast<int>(button.text.size()));
@@ -578,8 +872,13 @@ static std::string generateWin32Code(const ProgramSpec& program) {
     std::ostringstream output;
 
     output << "#include <windows.h>\n";
+    output << "#include <string>\n";
+    output << "#include <sstream>\n";
     appendUserIncludes(output, program.includes);
     output << "\n";
+    if (program.includes.enableCpp || !program.includes.cppHeaders.empty() || !program.texts.empty()) {
+        output << "using namespace std;\n\n";
+    }
 
     for (std::size_t i = 0; i < program.buttons.size(); ++i) {
         const ButtonSpec& button = program.buttons[i];
@@ -591,9 +890,88 @@ static std::string generateWin32Code(const ProgramSpec& program) {
         output << "static const int g_button" << i << "Id = " << (1000 + static_cast<int>(i)) << ";\n";
     }
 
-    output << R"(
-static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    for (std::size_t i = 0; i < program.lists.size(); ++i) {
+        output << "static HWND g_list" << i << " = NULL;\n";
+        output << "static HWND g_list" << i << "Title = NULL;\n";
+        output << "static HFONT g_list" << i << "TitleFont = NULL;\n";
+        output << "static const COLORREF g_list" << i << "FrameColor = " << colorToRgbCall(program.lists[i].frameColor) << ";\n";
+        output << "static const COLORREF g_list" << i << "BgColor = " << colorToRgbCall(program.lists[i].backgroundColor) << ";\n";
+        output << "static const COLORREF g_list" << i << "TitleColor = " << colorToRgbCall(program.lists[i].titleColor) << ";\n";
+        output << "static HBRUSH g_list" << i << "BgBrush = NULL;\n";
+    }
+
+    for (std::size_t i = 0; i < program.texts.size(); ++i) {
+        const TextSpec& text = program.texts[i];
+        output << "static HWND g_text" << i << " = NULL;\n";
+        output << "static HFONT g_text" << i << "Font = NULL;\n";
+        output << "static const COLORREF g_text" << i << "Color = " << colorToRgbCall(text.textColor) << ";\n";
+        output << "static const COLORREF g_text" << i << "BgColor = " << colorToRgbCall(text.backgroundColor) << ";\n";
+        output << "static HBRUSH g_text" << i << "BgBrush = NULL;\n";
+    }
+
+    output << R"(static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
+        case WM_PAINT: {
+            LRESULT result = DefWindowProcA(hwnd, message, wParam, lParam);
+            HDC hdc = GetDC(hwnd);
+)";
+
+    for (std::size_t i = 0; i < program.lists.size(); ++i) {
+        const ListSpec& list = program.lists[i];
+        if (!list.frame) {
+            continue;
+        }
+        int itemCount = 0;
+        for (const ButtonSpec& button : program.buttons) {
+            if (button.parent == list.name) {
+                ++itemCount;
+            }
+        }
+        const int titleHeight = list.title.empty() ? 0 : 34;
+        const int contentWidth = std::max(list.itemWidth, 1);
+        const int contentHeight = std::max(list.itemHeight * std::max(itemCount, 1), list.itemHeight) + titleHeight;
+        const int frameWidth = contentWidth + list.padding * 2;
+        const int frameHeight = contentHeight + list.padding * 2;
+        output << "            HBRUSH list" << i << "Brush = CreateSolidBrush(g_list" << i << "BgColor);\n";
+        output << "            RECT list" << i << "Rect = {" << list.x << ", " << list.y << ", " << (list.x + frameWidth) << ", " << (list.y + frameHeight) << "};\n";
+        output << "            FillRect(hdc, &list" << i << "Rect, list" << i << "Brush);\n";
+        output << "            DeleteObject(list" << i << "Brush);\n";
+        output << "            HPEN list" << i << "Pen = CreatePen(PS_SOLID, 1, g_list" << i << "FrameColor);\n";
+        output << "            HPEN list" << i << "OldPen = reinterpret_cast<HPEN>(SelectObject(hdc, list" << i << "Pen));\n";
+        output << "            MoveToEx(hdc, " << list.x << ", " << list.y << ", NULL);\n";
+        output << "            LineTo(hdc, " << (list.x + frameWidth) << ", " << list.y << ");\n";
+        output << "            LineTo(hdc, " << (list.x + frameWidth) << ", " << (list.y + frameHeight) << ");\n";
+        output << "            LineTo(hdc, " << list.x << ", " << (list.y + frameHeight) << ");\n";
+        output << "            LineTo(hdc, " << list.x << ", " << list.y << ");\n";
+        output << "            SelectObject(hdc, list" << i << "OldPen);\n";
+        output << "            DeleteObject(list" << i << "Pen);\n";
+    }
+
+    output << R"(            ReleaseDC(hwnd, hdc);
+            return result;
+        }
+        case WM_CTLCOLORSTATIC: {
+            HDC controlDc = reinterpret_cast<HDC>(wParam);
+            HWND control = reinterpret_cast<HWND>(lParam);
+)";
+
+    for (std::size_t i = 0; i < program.lists.size(); ++i) {
+        output << "            if (control == g_list" << i << " || control == g_list" << i << "Title) {\n";
+        output << "                SetBkColor(controlDc, g_list" << i << "BgColor);\n";
+        output << "                SetTextColor(controlDc, g_list" << i << "TitleColor);\n";
+        output << "                return reinterpret_cast<LRESULT>(g_list" << i << "BgBrush);\n";
+        output << "            }\n";
+    }
+    for (std::size_t i = 0; i < program.texts.size(); ++i) {
+        output << "            if (control == g_text" << i << ") {\n";
+        output << "                SetBkColor(controlDc, g_text" << i << "BgColor);\n";
+        output << "                SetTextColor(controlDc, g_text" << i << "Color);\n";
+        output << "                return reinterpret_cast<LRESULT>(g_text" << i << "BgBrush);\n";
+        output << "            }\n";
+    }
+
+    output << R"(            break;
+        }
         case WM_DRAWITEM: {
             LPDRAWITEMSTRUCT item = reinterpret_cast<LPDRAWITEMSTRUCT>(lParam);
 )";
@@ -678,6 +1056,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
     for (std::size_t i = 0; i < program.buttons.size(); ++i) {
         output << "            if (g_button" << i << "Font) { DeleteObject(g_button" << i << "Font); g_button" << i << "Font = NULL; }\n";
     }
+    for (std::size_t i = 0; i < program.lists.size(); ++i) {
+        output << "            if (g_list" << i << "TitleFont) { DeleteObject(g_list" << i << "TitleFont); g_list" << i << "TitleFont = NULL; }\n";
+        output << "            if (g_list" << i << "BgBrush) { DeleteObject(g_list" << i << "BgBrush); g_list" << i << "BgBrush = NULL; }\n";
+    }
+    for (std::size_t i = 0; i < program.texts.size(); ++i) {
+        output << "            if (g_text" << i << "Font) { DeleteObject(g_text" << i << "Font); g_text" << i << "Font = NULL; }\n";
+        output << "            if (g_text" << i << "BgBrush) { DeleteObject(g_text" << i << "BgBrush); g_text" << i << "BgBrush = NULL; }\n";
+    }
 
     output << R"(            PostQuitMessage(0);
             return 0;
@@ -693,6 +1079,7 @@ int main() {
     }
 
     output << "    HINSTANCE hInstance = GetModuleHandleA(NULL);\n";
+    output << "    auto LimdCToString = [](const auto& value) { std::ostringstream stream; stream << value; return stream.str(); };\n";
     output << "    const char* className = \"LimdCWindowClass\";\n";
     output << "    WNDCLASSEXA wc = {};\n";
     output << "    wc.cbSize = sizeof(wc);\n";
@@ -715,21 +1102,78 @@ int main() {
     output << "    }\n";
     output << "\n";
 
+    for (std::size_t i = 0; i < program.lists.size(); ++i) {
+        const ListSpec& list = program.lists[i];
+        int itemCount = 0;
+        for (const ButtonSpec& button : program.buttons) {
+            if (button.parent == list.name) {
+                ++itemCount;
+            }
+        }
+        const int width = std::max(list.itemWidth, 1) + list.padding * 2;
+        const int titleHeight = list.title.empty() ? 0 : 34;
+        const int height = std::max(list.itemHeight * std::max(itemCount, 1), list.itemHeight) + titleHeight + list.padding * 2;
+        output << "    g_list" << i << "BgBrush = CreateSolidBrush(g_list" << i << "BgColor);\n";
+        output << "    g_list" << i << " = CreateWindowExA(0, \"STATIC\", \"\", WS_CHILD | WS_VISIBLE, "
+               << list.x << ", " << list.y << ", " << width << ", " << height << ", " << list.parent
+               << ", NULL, hInstance, NULL);\n";
+        output << "    (void)g_list" << i << ";\n";
+        if (!list.title.empty()) {
+            output << "    g_list" << i << "TitleFont = CreateFontA(-18, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, \"Microsoft YaHei UI\");\n";
+            output << "    g_list" << i << "Title = CreateWindowExA(0, \"STATIC\", " << cppStringLiteral(list.title)
+                   << ", WS_CHILD | WS_VISIBLE | SS_CENTER, " << (list.x + list.padding) << ", " << (list.y + list.padding) << ", " << std::max(list.itemWidth, 1)
+                   << ", " << titleHeight << ", " << list.parent << ", NULL, hInstance, NULL);\n";
+            output << "    SendMessageA(g_list" << i << "Title, WM_SETFONT, reinterpret_cast<WPARAM>(g_list" << i << "TitleFont), TRUE);\n";
+        }
+    }
+    output << "\n";
+
     for (std::size_t i = 0; i < program.buttons.size(); ++i) {
         const ButtonSpec& button = program.buttons[i];
         const int fontSize = autoButtonFontSize(button);
         output << "    g_button" << i << "Font = CreateFontA(-" << fontSize
                << ", 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, "
                << "CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, \"Microsoft YaHei UI\");\n";
+        int listOffsetX = 0;
+        int listOffsetY = 0;
+        for (const ListSpec& list : program.lists) {
+            if (button.parent == list.name) {
+                listOffsetX = list.x + list.padding;
+                listOffsetY = list.y + list.padding + (list.title.empty() ? 0 : 34);
+                break;
+            }
+        }
+        const int drawX = button.x + listOffsetX;
+        const int drawY = button.y + listOffsetY;
         output << "    g_button" << i << " = CreateWindowExA(0, \"BUTTON\", g_button" << i << "Text, "
-               << "WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, " << button.x << ", " << button.y << ", "
-               << button.width << ", " << button.height << ", " << button.parent << ", reinterpret_cast<HMENU>(g_button" << i
+               << "WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, " << drawX << ", " << drawY << ", "
+               << button.width << ", " << button.height << ", " << parentExpression(program, button) << ", reinterpret_cast<HMENU>(g_button" << i
                << "Id), hInstance, NULL);\n";
+    }
+
+    for (std::size_t i = 0; i < program.texts.size(); ++i) {
+        const TextSpec& text = program.texts[i];
+        output << "    std::string g_text" << i << "Value = LimdCToString(" << text.textExpression << ");\n";
+        output << "    g_text" << i << "BgBrush = CreateSolidBrush(g_text" << i << "BgColor);\n";
+        output << "    g_text" << i << "Font = CreateFontA(-" << text.size
+               << ", 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, "
+               << "CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, \"Microsoft YaHei UI\");\n";
+        const std::string textStyle = text.center ? "SS_CENTER" : "SS_LEFT | SS_LEFTNOWORDWRAP";
+        output << "    g_text" << i << " = CreateWindowExA(0, \"STATIC\", g_text" << i << "Value.c_str(), WS_CHILD | WS_VISIBLE | " << textStyle << ", "
+               << text.x << ", " << text.y << ", " << text.width << ", " << text.height << ", " << window.name
+               << ", NULL, hInstance, NULL);\n";
+        output << "    SendMessageA(g_text" << i << ", WM_SETFONT, reinterpret_cast<WPARAM>(g_text" << i << "Font), TRUE);\n";
     }
 
     output << "\n";
     output << "    ShowWindow(" << window.name << ", SW_SHOWDEFAULT);\n";
     output << "    UpdateWindow(" << window.name << ");\n";
+    for (std::size_t i = 0; i < program.lists.size(); ++i) {
+        if (program.lists[i].frame) {
+            output << "    RedrawWindow(" << window.name << ", NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);\n";
+            break;
+        }
+    }
     output << "\n";
     output << "    MSG message = {};\n";
     output << "    while (GetMessageA(&message, NULL, 0, 0) > 0) {\n";
@@ -825,6 +1269,13 @@ int main(int argc, char** argv) {
 
         const int result = std::system(command.c_str());
         if (result != 0) {
+            if (fs::exists(args.output)) {
+                throw std::runtime_error(
+                    "目标编译失败，可能是输出 exe 正在运行或被其他程序占用，请先关闭: " +
+                    fs::absolute(args.output).string() +
+                    "，命令: " + command
+                );
+            }
             throw std::runtime_error("目标编译失败，请确认已安装 gcc/g++，命令: " + command);
         }
 
