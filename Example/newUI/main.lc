@@ -1,0 +1,30 @@
+#include [C++] \\导入C++语法
+#include [C] \\导入C语法
+#include [C]<stdio.h> \\导入C中的库
+#include [C++]<bits/stdc++.h> \\导入C++中的库
+
+fn main(){ \\主函数
+    new mainwindow=window{
+        .title="title"
+        .h=500
+        .w=300
+    }
+
+    new button of mainwindow=firstbutton{\
+        //长宽
+        .h=100
+        .w=250
+        //位置
+        .x=10
+        .y=5
+        .text="A button"
+        .color of button=#FE10EF
+        .color of text=#000000
+        .click=click()
+        .corner=circle //圆角边框，方：.corner=square
+    }
+    return 0;
+}
+fn click(){
+    firstbutton.'color of text'=#01FE01; //因为color of button中间有空格所以要加单引号
+}
