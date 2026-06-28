@@ -9,6 +9,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -72,6 +73,54 @@ struct TextSpec {
     std::string backgroundColor = "#FFFFFF";
     int size = 14;
     bool center = false;
+    bool bold = false;
+    bool edit = false;
+};
+
+struct CmdSpec {
+    std::string parent;
+    std::string name;
+    int x = 0;
+    int y = 0;
+    int width = 240;
+    int height = 120;
+    std::string textColor = "#00FF00";
+    std::string backgroundColor = "#000000";
+    bool edit = false;
+    std::string runHandler;
+};
+
+struct CheckBoxSpec {
+    std::string parent;
+    std::string name;
+    std::string text = "CheckBox";
+    int x = 0;
+    int y = 0;
+    int width = 120;
+    int height = 28;
+    bool checked = false;
+};
+
+struct SelectSpec {
+    std::string parent;
+    std::string name;
+    int x = 0;
+    int y = 0;
+    int width = 160;
+    int height = 120;
+    std::vector<std::string> items;
+    int selected = 0;
+};
+
+struct ProgressSpec {
+    std::string parent;
+    std::string name;
+    int x = 0;
+    int y = 0;
+    int width = 180;
+    int height = 24;
+    int value = 0;
+    int max = 100;
 };
 
 struct UiAction {
@@ -80,9 +129,28 @@ struct UiAction {
     std::string value;
 };
 
+struct CmdOutputAction {
+    std::string objectName;
+    std::string textLiteral;
+};
+
 struct FunctionSpec {
+    std::string group;
     std::string name;
+    std::vector<std::string> cmdOutputStatements;
+    std::vector<CmdOutputAction> cmdOutputActions;
+    bool returnToCmd = false;
     std::vector<UiAction> actions;
+};
+
+struct NativeStatement {
+    std::string text;
+    bool afterUiReady = false;
+};
+
+struct ConcSpec {
+    std::string name;
+    std::string group;
 };
 
 struct ProgramSpec {
@@ -91,8 +159,13 @@ struct ProgramSpec {
     std::vector<ListSpec> lists;
     std::vector<ButtonSpec> buttons;
     std::vector<TextSpec> texts;
+    std::vector<CmdSpec> cmds;
+    std::vector<CheckBoxSpec> checkBoxes;
+    std::vector<SelectSpec> selects;
+    std::vector<ProgressSpec> progresses;
+    std::vector<ConcSpec> concs;
     std::vector<FunctionSpec> functions;
-    std::vector<std::string> nativeStatements;
+    std::vector<NativeStatement> nativeStatements;
     int returnCode = 0;
 };
 
@@ -548,6 +621,18 @@ static TextSpec makeText(const CleanLine& line, const std::string& name, const s
                 throw lineError(propertyLine, ".center 只能是 0 或 1");
             }
             text.center = center == 1;
+        } else if (key == "bold") {
+            const int bold = parseInteger(propertyLine, value, ".bold");
+            if (bold != 0 && bold != 1) {
+                throw lineError(propertyLine, ".bold 只能是 0 或 1");
+            }
+            text.bold = bold == 1;
+        } else if (key == "edit") {
+            const int edit = parseInteger(propertyLine, value, ".edit");
+            if (edit != 0 && edit != 1) {
+                throw lineError(propertyLine, ".edit 只能是 0 或 1");
+            }
+            text.edit = edit == 1;
         } else if (key == "x") {
             text.x = parseInteger(propertyLine, value, ".x");
         } else if (key == "y") {
@@ -568,6 +653,218 @@ static TextSpec makeText(const CleanLine& line, const std::string& name, const s
     return text;
 }
 
+static CmdSpec makeCmd(const CleanLine& line, const std::string& parent, const std::string& name, const std::vector<std::pair<CleanLine, std::smatch>>& properties) {
+    CmdSpec cmd;
+    cmd.parent = parent;
+    cmd.name = name;
+
+    for (const auto& item : properties) {
+        const CleanLine& propertyLine = item.first;
+        const std::smatch& match = item.second;
+        const std::string key = match[1].str();
+        const std::string target = match[2].matched ? match[2].str() : "";
+        const std::string value = trim(match[3].str());
+
+        if (!target.empty()) {
+            throw lineError(propertyLine, "cmd 属性不支持 of 目标");
+        }
+        if (key == "x") {
+            cmd.x = parseInteger(propertyLine, value, ".x");
+        } else if (key == "y") {
+            cmd.y = parseInteger(propertyLine, value, ".y");
+        } else if (key == "w") {
+            cmd.width = parseInteger(propertyLine, value, ".w");
+        } else if (key == "h") {
+            cmd.height = parseInteger(propertyLine, value, ".h");
+        } else if (key == "run") {
+            cmd.runHandler = parseCallName(propertyLine, value);
+        } else if (key == "text color") {
+            cmd.textColor = parseColor(propertyLine, value);
+        } else if (key == "background color") {
+            cmd.backgroundColor = parseColor(propertyLine, value);
+        } else if (key == "edit") {
+            const int edit = parseInteger(propertyLine, value, ".edit");
+            if (edit != 0 && edit != 1) {
+                throw lineError(propertyLine, ".edit 只能是 0 或 1");
+            }
+            cmd.edit = edit == 1;
+        } else {
+            throw lineError(propertyLine, "未知 cmd 属性: " + key);
+        }
+    }
+
+    if (cmd.width <= 0 || cmd.height <= 0) {
+        throw lineError(line, "cmd 的 .w/.h 必须大于 0");
+    }
+    if (cmd.runHandler.empty()) {
+        throw lineError(line, "cmd 需要 .run=functionName()");
+    }
+
+    return cmd;
+}
+
+static CheckBoxSpec makeCheckBox(const CleanLine& line, const std::string& parent, const std::string& name, const std::vector<std::pair<CleanLine, std::smatch>>& properties) {
+    CheckBoxSpec checkBox;
+    checkBox.parent = parent;
+    checkBox.name = name;
+
+    for (const auto& item : properties) {
+        const CleanLine& propertyLine = item.first;
+        const std::smatch& match = item.second;
+        const std::string key = match[1].str();
+        const std::string target = match[2].matched ? match[2].str() : "";
+        const std::string value = trim(match[3].str());
+        if (!target.empty()) {
+            throw lineError(propertyLine, "checkbox 属性不支持 of 目标");
+        }
+        if (key == "text") {
+            checkBox.text = unquote(value);
+        } else if (key == "x") {
+            checkBox.x = parseInteger(propertyLine, value, ".x");
+        } else if (key == "y") {
+            checkBox.y = parseInteger(propertyLine, value, ".y");
+        } else if (key == "w") {
+            checkBox.width = parseInteger(propertyLine, value, ".w");
+        } else if (key == "h") {
+            checkBox.height = parseInteger(propertyLine, value, ".h");
+        } else if (key == "checked") {
+            const int checked = parseInteger(propertyLine, value, ".checked");
+            if (checked != 0 && checked != 1) {
+                throw lineError(propertyLine, ".checked 只能是 0 或 1");
+            }
+            checkBox.checked = checked == 1;
+        } else {
+            throw lineError(propertyLine, "未知 checkbox 属性: " + key);
+        }
+    }
+
+    if (checkBox.width <= 0 || checkBox.height <= 0) {
+        throw lineError(line, "checkbox 的 .w/.h 必须大于 0");
+    }
+    return checkBox;
+}
+
+static std::vector<std::string> parseItems(const CleanLine& line, const std::string& value) {
+    const std::string trimmed = trim(value);
+    if (trimmed.size() < 2 || trimmed.front() != '[' || trimmed.back() != ']') {
+        throw lineError(line, ".items 需要 [\"A\", \"B\"]");
+    }
+    std::vector<std::string> items;
+    std::string current;
+    bool inString = false;
+    char quote = '\0';
+    for (std::size_t i = 1; i + 1 < trimmed.size(); ++i) {
+        const char ch = trimmed[i];
+        if (inString) {
+            current.push_back(ch);
+            if (ch == '\\' && i + 1 < trimmed.size()) {
+                current.push_back(trimmed[++i]);
+                continue;
+            }
+            if (ch == quote) {
+                items.push_back(unquote(current));
+                current.clear();
+                inString = false;
+            }
+            continue;
+        }
+        if (ch == '"' || ch == '\'') {
+            inString = true;
+            quote = ch;
+            current.push_back(ch);
+        } else if (!std::isspace(static_cast<unsigned char>(ch)) && ch != ',') {
+            throw lineError(line, ".items 只支持字符串数组");
+        }
+    }
+    if (inString || items.empty()) {
+        throw lineError(line, ".items 需要至少一个字符串项");
+    }
+    return items;
+}
+
+static SelectSpec makeSelect(const CleanLine& line, const std::string& parent, const std::string& name, const std::vector<std::pair<CleanLine, std::smatch>>& properties) {
+    SelectSpec select;
+    select.parent = parent;
+    select.name = name;
+
+    for (const auto& item : properties) {
+        const CleanLine& propertyLine = item.first;
+        const std::smatch& match = item.second;
+        const std::string key = match[1].str();
+        const std::string target = match[2].matched ? match[2].str() : "";
+        const std::string value = trim(match[3].str());
+        if (!target.empty()) {
+            throw lineError(propertyLine, "select 属性不支持 of 目标");
+        }
+        if (key == "x") {
+            select.x = parseInteger(propertyLine, value, ".x");
+        } else if (key == "y") {
+            select.y = parseInteger(propertyLine, value, ".y");
+        } else if (key == "w") {
+            select.width = parseInteger(propertyLine, value, ".w");
+        } else if (key == "h") {
+            select.height = parseInteger(propertyLine, value, ".h");
+        } else if (key == "items") {
+            select.items = parseItems(propertyLine, value);
+        } else if (key == "selected") {
+            select.selected = parseInteger(propertyLine, value, ".selected");
+        } else {
+            throw lineError(propertyLine, "未知 select 属性: " + key);
+        }
+    }
+
+    if (select.width <= 0 || select.height <= 0) {
+        throw lineError(line, "select 的 .w/.h 必须大于 0");
+    }
+    if (select.items.empty()) {
+        throw lineError(line, "select 需要 .items=[...]");
+    }
+    if (select.selected < 0 || select.selected >= static_cast<int>(select.items.size())) {
+        throw lineError(line, ".selected 超出 .items 范围");
+    }
+    return select;
+}
+
+static ProgressSpec makeProgress(const CleanLine& line, const std::string& parent, const std::string& name, const std::vector<std::pair<CleanLine, std::smatch>>& properties) {
+    ProgressSpec progress;
+    progress.parent = parent;
+    progress.name = name;
+
+    for (const auto& item : properties) {
+        const CleanLine& propertyLine = item.first;
+        const std::smatch& match = item.second;
+        const std::string key = match[1].str();
+        const std::string target = match[2].matched ? match[2].str() : "";
+        const std::string value = trim(match[3].str());
+        if (!target.empty()) {
+            throw lineError(propertyLine, "progress 属性不支持 of 目标");
+        }
+        if (key == "x") {
+            progress.x = parseInteger(propertyLine, value, ".x");
+        } else if (key == "y") {
+            progress.y = parseInteger(propertyLine, value, ".y");
+        } else if (key == "w") {
+            progress.width = parseInteger(propertyLine, value, ".w");
+        } else if (key == "h") {
+            progress.height = parseInteger(propertyLine, value, ".h");
+        } else if (key == "value") {
+            progress.value = parseInteger(propertyLine, value, ".value");
+        } else if (key == "max") {
+            progress.max = parseInteger(propertyLine, value, ".max");
+        } else {
+            throw lineError(propertyLine, "未知 progress 属性: " + key);
+        }
+    }
+
+    if (progress.width <= 0 || progress.height <= 0 || progress.max <= 0) {
+        throw lineError(line, "progress 的 .w/.h/.max 必须大于 0");
+    }
+    if (progress.value < 0 || progress.value > progress.max) {
+        throw lineError(line, ".value 必须在 0 到 .max 之间");
+    }
+    return progress;
+}
+
 static void applyUiAction(ButtonSpec& button, const UiAction& action) {
     if (action.property == "color of button") {
         button.buttonColor = action.value;
@@ -580,9 +877,41 @@ static void applyUiAction(ButtonSpec& button, const UiAction& action) {
     }
 }
 
+static std::string decodeStringContent(const std::string& value) {
+    std::string result;
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        if (value[i] != '\\' || i + 1 >= value.size()) {
+            result.push_back(value[i]);
+            continue;
+        }
+        const char next = value[++i];
+        switch (next) {
+            case 'n': result.push_back('\n'); break;
+            case 'r': result.push_back('\r'); break;
+            case 't': result.push_back('\t'); break;
+            case '\\': result.push_back('\\'); break;
+            case '"': result.push_back('"'); break;
+            default: result.push_back(next); break;
+        }
+    }
+    return result;
+}
+
+static std::string parseCmdOutputStatement(const CleanLine& line) {
+    std::smatch match;
+    if (std::regex_match(line.text, match, std::regex(R"(^printf\s*\(\s*\"(.*)\"\s*\)\s*;?\s*$)"))) {
+        return cppStringLiteral(decodeStringContent(match[1].str()));
+    }
+    if (std::regex_match(line.text, match, std::regex(R"(^cout\s*<<\s*\"(.*)\"\s*;?\s*$)"))) {
+        return cppStringLiteral(decodeStringContent(match[1].str()));
+    }
+    throw lineError(line, "cmd mode 暂只支持 printf(\"...\") 或 cout<<\"...\"");
+}
+
 static FunctionSpec parseFunctionBlock(const std::vector<CleanLine>& lines, std::size_t& index) {
-    static const std::regex functionPattern(R"(^fn\s+([A-Za-z_]\w*)\s*\(\s*\)\s*\{\s*$)");
+    static const std::regex functionPattern(R"(^fn\s+(?:(c)\s*:\s*)?([A-Za-z_]\w*)\s*(?:\(\s*\))?\s*\{\s*$)");
     static const std::regex actionPattern(R"(^([A-Za-z_]\w*)\.(?:'([^']+)'|([A-Za-z_]\w*))\s*=\s*(.+?)\s*;?\s*$)");
+    static const std::regex cmdPrintPattern(R"(^([A-Za-z_]\w*)\.\*printf\s*\(\s*\"(.*)\"\s*\)\s*;?\s*$)");
 
     std::smatch functionMatch;
     if (!std::regex_match(lines[index].text, functionMatch, functionPattern)) {
@@ -590,7 +919,8 @@ static FunctionSpec parseFunctionBlock(const std::vector<CleanLine>& lines, std:
     }
 
     FunctionSpec function;
-    function.name = functionMatch[1].str();
+    function.group = functionMatch[1].matched ? functionMatch[1].str() : "";
+    function.name = functionMatch[2].str();
 
     for (++index; index < lines.size(); ++index) {
         const CleanLine& line = lines[index];
@@ -598,17 +928,32 @@ static FunctionSpec parseFunctionBlock(const std::vector<CleanLine>& lines, std:
             return function;
         }
 
-        std::smatch actionMatch;
-        if (!std::regex_match(line.text, actionMatch, actionPattern)) {
-            throw lineError(line, "无法解析函数语句: " + line.text);
+        if (line.text == "*return #cmd mode") {
+            function.returnToCmd = true;
+            continue;
         }
 
-        const std::string property = actionMatch[2].matched ? actionMatch[2].str() : actionMatch[3].str();
-        std::string value = trim(actionMatch[4].str());
-        if (property == "color of button" || property == "color of text") {
-            value = parseColor(line, value);
+        std::smatch cmdPrintMatch;
+        if (std::regex_match(line.text, cmdPrintMatch, cmdPrintPattern)) {
+            function.cmdOutputActions.push_back({cmdPrintMatch[1].str(), cppStringLiteral(decodeStringContent(cmdPrintMatch[2].str()))});
+            continue;
         }
-        function.actions.push_back({actionMatch[1].str(), property, value});
+
+        std::smatch actionMatch;
+        if (std::regex_match(line.text, actionMatch, actionPattern)) {
+            const std::string property = actionMatch[2].matched ? actionMatch[2].str() : actionMatch[3].str();
+            std::string value = trim(actionMatch[4].str());
+            if (property == "color of button" || property == "color of text") {
+                value = parseColor(line, value);
+            }
+            if (!value.empty() && value.back() == ';') {
+                value = trim(value.substr(0, value.size() - 1));
+            }
+            function.actions.push_back({actionMatch[1].str(), property, value});
+            continue;
+        }
+
+        function.cmdOutputStatements.push_back(parseCmdOutputStatement(line));
     }
 
     throw std::runtime_error("函数 " + function.name + " 缺少结束的 }");
@@ -620,9 +965,15 @@ static ProgramSpec parseProgram(const std::string& source) {
     const std::vector<CleanLine> lines = preprocess(source);
 
     for (const CleanLine& line : lines) {
-        if (!parseInclude(line, program.includes)) {
-            bodyLines.push_back(line);
+        if (parseInclude(line, program.includes)) {
+            continue;
         }
+        std::smatch concMatch;
+        if (std::regex_match(line.text, concMatch, std::regex(R"(^conc\s+([A-Za-z_]\w*)\s*\(\s*\)\s*=\s*([A-Za-z_]\w*)\s*;?\s*$)"))) {
+            program.concs.push_back({concMatch[1].str(), concMatch[2].str()});
+            continue;
+        }
+        bodyLines.push_back(line);
     }
 
     std::size_t mainIndex = bodyLines.size();
@@ -641,7 +992,12 @@ static ProgramSpec parseProgram(const std::string& source) {
     static const std::regex listPattern(R"(^new\s+list\s+of\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*\{\s*$)");
     static const std::regex buttonPattern(R"(^new\s+button\s+of\s+([A-Za-z_]\w*)\s*(?:=\s*([A-Za-z_]\w*))?\s*\{\s*$)");
     static const std::regex textPattern(R"(^new\s+text\s*=\s*([A-Za-z_]\w*)\s*\{\s*$)");
+    static const std::regex cmdPattern(R"(^new\s+cmd\s+of\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*\{\s*$)");
+    static const std::regex checkboxPattern(R"(^new\s+checkbox\s+of\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*\{\s*$)");
+    static const std::regex selectPattern(R"(^new\s+select\s+of\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*\{\s*$)");
+    static const std::regex progressPattern(R"(^new\s+progress\s+of\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*\{\s*$)");
     static const std::regex returnPattern(R"(^return\s+(-?\d+)\s*;?\s*$)");
+    static const std::regex concPattern(R"(^conc\s+([A-Za-z_]\w*)\s*\(\s*\)\s*=\s*([A-Za-z_]\w*)\s*;?\s*$)");
 
     bool foundMainEnd = false;
     std::size_t afterMainIndex = mainIndex + 1;
@@ -714,13 +1070,43 @@ static ProgramSpec parseProgram(const std::string& source) {
             continue;
         }
 
+        if (std::regex_match(line.text, match, cmdPattern)) {
+            const auto properties = parsePropertyBlock(bodyLines, i);
+            program.cmds.push_back(makeCmd(line, match[1].str(), match[2].str(), properties));
+            continue;
+        }
+
+        if (std::regex_match(line.text, match, checkboxPattern)) {
+            const auto properties = parsePropertyBlock(bodyLines, i);
+            program.checkBoxes.push_back(makeCheckBox(line, match[1].str(), match[2].str(), properties));
+            continue;
+        }
+
+        if (std::regex_match(line.text, match, selectPattern)) {
+            const auto properties = parsePropertyBlock(bodyLines, i);
+            program.selects.push_back(makeSelect(line, match[1].str(), match[2].str(), properties));
+            continue;
+        }
+
+        if (std::regex_match(line.text, match, progressPattern)) {
+            const auto properties = parsePropertyBlock(bodyLines, i);
+            program.progresses.push_back(makeProgress(line, match[1].str(), match[2].str(), properties));
+            continue;
+        }
+
         if (std::regex_match(line.text, match, returnPattern)) {
             program.returnCode = parseInteger(line, match[1].str(), "return");
             continue;
         }
 
         if (program.includes.enableC || program.includes.enableCpp) {
-            program.nativeStatements.push_back(line.text);
+            const bool afterUiReady = !program.concs.empty() && std::any_of(program.concs.begin(), program.concs.end(), [&](const ConcSpec& conc) {
+                return line.text == conc.name + "();" || line.text == conc.name + "()";
+            });
+            if (afterUiReady && !program.nativeStatements.empty()) {
+                program.nativeStatements.back().afterUiReady = true;
+            }
+            program.nativeStatements.push_back({line.text, afterUiReady});
             continue;
         }
 
@@ -732,12 +1118,12 @@ static ProgramSpec parseProgram(const std::string& source) {
     }
 
     for (std::size_t i = afterMainIndex; i < bodyLines.size(); ++i) {
-        if (std::regex_match(bodyLines[i].text, std::regex(R"(^fn\s+[A-Za-z_]\w*\s*\(\s*\)\s*\{\s*$)"))) {
+        if (std::regex_match(bodyLines[i].text, std::regex(R"(^fn\s+(?:(?:c)\s*:\s*)?[A-Za-z_]\w*\s*(?:\(\s*\))?\s*\{\s*$)"))) {
             program.functions.push_back(parseFunctionBlock(bodyLines, i));
             continue;
         }
 
-        throw lineError(bodyLines[i], "主函数外只支持 fn name(){ ... } 函数定义");
+        throw lineError(bodyLines[i], "主函数外只支持 fn name(){ ... } 或 fn c:name{ ... } 函数定义");
     }
 
     if (!program.buttons.empty() && !program.window.has_value()) {
@@ -745,6 +1131,12 @@ static ProgramSpec parseProgram(const std::string& source) {
     }
     if (!program.texts.empty() && !program.window.has_value()) {
         throw std::runtime_error("text 需要先定义 window");
+    }
+    if (!program.cmds.empty() && !program.window.has_value()) {
+        throw std::runtime_error("cmd 需要先定义 window");
+    }
+    if ((!program.checkBoxes.empty() || !program.selects.empty() || !program.progresses.empty()) && !program.window.has_value()) {
+        throw std::runtime_error("checkbox/select/progress 需要先定义 window");
     }
 
     if (program.window.has_value()) {
@@ -776,18 +1168,53 @@ static ProgramSpec parseProgram(const std::string& source) {
                 throw std::runtime_error("button 的父对象未定义: " + button.parent);
             }
         }
+
+        for (const CmdSpec& cmd : program.cmds) {
+            if (cmd.parent != program.window->name) {
+                throw std::runtime_error("cmd 的父窗口未定义: " + cmd.parent);
+            }
+        }
+
+        const auto validateParent = [&](const std::string& component, const std::string& parent) {
+            if (parent != program.window->name) {
+                throw std::runtime_error(component + " 的父窗口未定义: " + parent);
+            }
+        };
+        for (const CheckBoxSpec& checkBox : program.checkBoxes) {
+            validateParent("checkbox", checkBox.parent);
+        }
+        for (const SelectSpec& select : program.selects) {
+            validateParent("select", select.parent);
+        }
+        for (const ProgressSpec& progress : program.progresses) {
+            validateParent("progress", progress.parent);
+        }
     }
 
     for (const FunctionSpec& function : program.functions) {
         for (const UiAction& action : function.actions) {
-            const bool foundTarget = std::any_of(program.buttons.begin(), program.buttons.end(), [&](const ButtonSpec& button) {
+            const bool foundButton = std::any_of(program.buttons.begin(), program.buttons.end(), [&](const ButtonSpec& button) {
                 return button.name == action.objectName;
             });
-            if (!foundTarget) {
+            const bool foundProgress = std::any_of(program.progresses.begin(), program.progresses.end(), [&](const ProgressSpec& progress) {
+                return progress.name == action.objectName;
+            });
+            if (!foundButton && !foundProgress) {
                 throw std::runtime_error("函数 " + function.name + " 修改了未定义对象: " + action.objectName);
             }
-            if (action.property != "color of button" && action.property != "color of text") {
+            if (foundButton && action.property != "color of button" && action.property != "color of text") {
                 throw std::runtime_error("暂不支持修改按钮属性: " + action.property);
+            }
+            if (foundProgress && action.property != "value") {
+                throw std::runtime_error("暂不支持修改 progress 属性: " + action.property);
+            }
+        }
+        for (const CmdOutputAction& action : function.cmdOutputActions) {
+            const bool foundCmd = std::any_of(program.cmds.begin(), program.cmds.end(), [&](const CmdSpec& cmd) {
+                return cmd.name == action.objectName;
+            });
+            if (!foundCmd) {
+                throw std::runtime_error("函数 " + function.name + " 输出到未定义 cmd: " + action.objectName);
             }
         }
     }
@@ -801,6 +1228,24 @@ static ProgramSpec parseProgram(const std::string& source) {
         });
         if (!foundHandler) {
             throw std::runtime_error("button " + button.name + " 绑定了未定义 click 函数: " + button.clickHandler);
+        }
+    }
+
+    for (const CmdSpec& cmd : program.cmds) {
+        const bool foundHandler = std::any_of(program.functions.begin(), program.functions.end(), [&](const FunctionSpec& function) {
+            return function.name == cmd.runHandler && function.returnToCmd;
+        });
+        if (!foundHandler) {
+            throw std::runtime_error("cmd " + cmd.name + " 绑定了未定义或未使用 *return #cmd mode 的函数: " + cmd.runHandler);
+        }
+    }
+
+    for (const ConcSpec& conc : program.concs) {
+        const bool foundGroupedFunction = std::any_of(program.functions.begin(), program.functions.end(), [&](const FunctionSpec& function) {
+            return function.group == conc.group;
+        });
+        if (!foundGroupedFunction) {
+            throw std::runtime_error("conc " + conc.name + " 没有找到组函数: " + conc.group + ":*");
         }
     }
 
@@ -859,8 +1304,8 @@ static std::string generateConsoleCode(const ProgramSpec& program) {
     std::ostringstream output;
     appendUserIncludes(output, program.includes);
     output << "\nint main() {\n";
-    for (const std::string& statement : program.nativeStatements) {
-        output << "    " << statement << "\n";
+    for (const NativeStatement& statement : program.nativeStatements) {
+        output << "    " << statement.text << "\n";
     }
     output << "    return " << program.returnCode << ";\n";
     output << "}\n";
@@ -872,13 +1317,22 @@ static std::string generateWin32Code(const ProgramSpec& program) {
     std::ostringstream output;
 
     output << "#include <windows.h>\n";
+    output << "#include <commctrl.h>\n";
     output << "#include <string>\n";
     output << "#include <sstream>\n";
+    output << "#include <thread>\n";
+    output << "#include <vector>\n";
     appendUserIncludes(output, program.includes);
     output << "\n";
     if (program.includes.enableCpp || !program.includes.cppHeaders.empty() || !program.texts.empty()) {
         output << "using namespace std;\n\n";
     }
+
+    output << "static HWND g_limdCMainWindow = NULL;\n";
+    output << "static constexpr UINT LIMDC_SET_PROGRESS = WM_APP + 1;\n";
+    output << "static constexpr UINT LIMDC_APPEND_CMD_TEXT = WM_APP + 2;\n";
+    output << "struct LimdCProgressUpdate { HWND control; int value; };\n";
+    output << "struct LimdCCmdAppend { HWND control; std::string text; };\n\n";
 
     for (std::size_t i = 0; i < program.buttons.size(); ++i) {
         const ButtonSpec& button = program.buttons[i];
@@ -909,8 +1363,104 @@ static std::string generateWin32Code(const ProgramSpec& program) {
         output << "static HBRUSH g_text" << i << "BgBrush = NULL;\n";
     }
 
+    for (std::size_t i = 0; i < program.cmds.size(); ++i) {
+        const CmdSpec& cmd = program.cmds[i];
+        output << "static HWND g_cmd" << i << " = NULL;\n";
+        output << "static HFONT g_cmd" << i << "Font = NULL;\n";
+        output << "static const COLORREF g_cmd" << i << "Color = " << colorToRgbCall(cmd.textColor) << ";\n";
+        output << "static const COLORREF g_cmd" << i << "BgColor = " << colorToRgbCall(cmd.backgroundColor) << ";\n";
+        output << "static HBRUSH g_cmd" << i << "BgBrush = NULL;\n";
+    }
+
+    for (std::size_t i = 0; i < program.checkBoxes.size(); ++i) {
+        output << "static HWND g_checkbox" << i << " = NULL;\n";
+        output << "static HFONT g_checkbox" << i << "Font = NULL;\n";
+    }
+    for (std::size_t i = 0; i < program.selects.size(); ++i) {
+        output << "static HWND g_select" << i << " = NULL;\n";
+        output << "static HFONT g_select" << i << "Font = NULL;\n";
+    }
+    for (std::size_t i = 0; i < program.progresses.size(); ++i) {
+        output << "static HWND g_progress" << i << " = NULL;\n";
+    }
+
+    const auto progressIndexByName = [&](const std::string& name) -> int {
+        for (std::size_t i = 0; i < program.progresses.size(); ++i) {
+            if (program.progresses[i].name == name) {
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
+    };
+    const auto cmdIndexByName = [&](const std::string& name) -> int {
+        for (std::size_t i = 0; i < program.cmds.size(); ++i) {
+            if (program.cmds[i].name == name) {
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
+    };
+
+    output << "static void LimdCAppendText(HWND control, const char* text) {\n";
+    output << "    int length = GetWindowTextLengthA(control);\n";
+    output << "    SendMessageA(control, EM_SETSEL, length, length);\n";
+    output << "    SendMessageA(control, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(text));\n";
+    output << "}\n\n";
+
+    for (const ConcSpec& conc : program.concs) {
+        output << "static void " << conc.name << "();\n";
+    }
+    output << "\n";
+
+    for (const ConcSpec& conc : program.concs) {
+        output << "static void " << conc.name << "() {\n";
+        output << "    std::thread([](){\n";
+        output << "        std::vector<std::thread> workers;\n";
+        for (const FunctionSpec& function : program.functions) {
+            if (function.group != conc.group) {
+                continue;
+            }
+            output << "        workers.emplace_back([](){\n";
+            for (const UiAction& action : function.actions) {
+                const int progressIndex = progressIndexByName(action.objectName);
+                if (progressIndex >= 0 && action.property == "value") {
+                    output << "            auto* update = new LimdCProgressUpdate{g_progress" << progressIndex << ", " << action.value << "};\n";
+                    output << "            PostMessageA(g_limdCMainWindow, LIMDC_SET_PROGRESS, 0, reinterpret_cast<LPARAM>(update));\n";
+                }
+            }
+            for (const CmdOutputAction& action : function.cmdOutputActions) {
+                const int cmdIndex = cmdIndexByName(action.objectName);
+                if (cmdIndex >= 0) {
+                    output << "            auto* append = new LimdCCmdAppend{g_cmd" << cmdIndex << ", " << action.textLiteral << "};\n";
+                    output << "            PostMessageA(g_limdCMainWindow, LIMDC_APPEND_CMD_TEXT, 0, reinterpret_cast<LPARAM>(append));\n";
+                }
+            }
+            output << "        });\n";
+        }
+        output << "        for (std::thread& worker : workers) { worker.join(); }\n";
+        output << "    }).detach();\n";
+        output << "}\n\n";
+    }
+
     output << R"(static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
+        case LIMDC_SET_PROGRESS: {
+            auto* update = reinterpret_cast<LimdCProgressUpdate*>(lParam);
+            if (update) {
+                SendMessageA(update->control, PBM_SETPOS, update->value, 0);
+                InvalidateRect(update->control, NULL, TRUE);
+                delete update;
+            }
+            return 0;
+        }
+        case LIMDC_APPEND_CMD_TEXT: {
+            auto* append = reinterpret_cast<LimdCCmdAppend*>(lParam);
+            if (append) {
+                LimdCAppendText(append->control, append->text.c_str());
+                delete append;
+            }
+            return 0;
+        }
         case WM_PAINT: {
             LRESULT result = DefWindowProcA(hwnd, message, wParam, lParam);
             HDC hdc = GetDC(hwnd);
@@ -967,6 +1517,38 @@ static std::string generateWin32Code(const ProgramSpec& program) {
         output << "                SetBkColor(controlDc, g_text" << i << "BgColor);\n";
         output << "                SetTextColor(controlDc, g_text" << i << "Color);\n";
         output << "                return reinterpret_cast<LRESULT>(g_text" << i << "BgBrush);\n";
+        output << "            }\n";
+    }
+    for (std::size_t i = 0; i < program.cmds.size(); ++i) {
+        output << "            if (control == g_cmd" << i << ") {\n";
+        output << "                SetBkColor(controlDc, g_cmd" << i << "BgColor);\n";
+        output << "                SetTextColor(controlDc, g_cmd" << i << "Color);\n";
+        output << "                return reinterpret_cast<LRESULT>(g_cmd" << i << "BgBrush);\n";
+        output << "            }\n";
+    }
+
+    output << R"(            break;
+        }
+        case WM_CTLCOLOREDIT: {
+            HDC controlDc = reinterpret_cast<HDC>(wParam);
+            HWND control = reinterpret_cast<HWND>(lParam);
+)";
+
+    for (std::size_t i = 0; i < program.texts.size(); ++i) {
+        if (!program.texts[i].edit) {
+            continue;
+        }
+        output << "            if (control == g_text" << i << ") {\n";
+        output << "                SetBkColor(controlDc, g_text" << i << "BgColor);\n";
+        output << "                SetTextColor(controlDc, g_text" << i << "Color);\n";
+        output << "                return reinterpret_cast<LRESULT>(g_text" << i << "BgBrush);\n";
+        output << "            }\n";
+    }
+    for (std::size_t i = 0; i < program.cmds.size(); ++i) {
+        output << "            if (control == g_cmd" << i << ") {\n";
+        output << "                SetBkColor(controlDc, g_cmd" << i << "BgColor);\n";
+        output << "                SetTextColor(controlDc, g_cmd" << i << "Color);\n";
+        output << "                return reinterpret_cast<LRESULT>(g_cmd" << i << "BgBrush);\n";
         output << "            }\n";
     }
 
@@ -1050,6 +1632,10 @@ static std::string generateWin32Code(const ProgramSpec& program) {
 
     output << R"(            break;
         }
+        case WM_SIZE:
+            InvalidateRect(hwnd, NULL, TRUE);
+            RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+            return 0;
         case WM_DESTROY:
 )";
 
@@ -1064,6 +1650,16 @@ static std::string generateWin32Code(const ProgramSpec& program) {
         output << "            if (g_text" << i << "Font) { DeleteObject(g_text" << i << "Font); g_text" << i << "Font = NULL; }\n";
         output << "            if (g_text" << i << "BgBrush) { DeleteObject(g_text" << i << "BgBrush); g_text" << i << "BgBrush = NULL; }\n";
     }
+    for (std::size_t i = 0; i < program.cmds.size(); ++i) {
+        output << "            if (g_cmd" << i << "Font) { DeleteObject(g_cmd" << i << "Font); g_cmd" << i << "Font = NULL; }\n";
+        output << "            if (g_cmd" << i << "BgBrush) { DeleteObject(g_cmd" << i << "BgBrush); g_cmd" << i << "BgBrush = NULL; }\n";
+    }
+    for (std::size_t i = 0; i < program.checkBoxes.size(); ++i) {
+        output << "            if (g_checkbox" << i << "Font) { DeleteObject(g_checkbox" << i << "Font); g_checkbox" << i << "Font = NULL; }\n";
+    }
+    for (std::size_t i = 0; i < program.selects.size(); ++i) {
+        output << "            if (g_select" << i << "Font) { DeleteObject(g_select" << i << "Font); g_select" << i << "Font = NULL; }\n";
+    }
 
     output << R"(            PostQuitMessage(0);
             return 0;
@@ -1074,11 +1670,15 @@ static std::string generateWin32Code(const ProgramSpec& program) {
 int main() {
 )";
 
-    for (const std::string& statement : program.nativeStatements) {
-        output << "    " << statement << "\n";
+    for (const NativeStatement& statement : program.nativeStatements) {
+        if (!statement.afterUiReady) {
+            output << "    " << statement.text << "\n";
+        }
     }
 
     output << "    HINSTANCE hInstance = GetModuleHandleA(NULL);\n";
+    output << "    INITCOMMONCONTROLSEX icc = { sizeof(INITCOMMONCONTROLSEX), ICC_PROGRESS_CLASS };\n";
+    output << "    InitCommonControlsEx(&icc);\n";
     output << "    auto LimdCToString = [](const auto& value) { std::ostringstream stream; stream << value; return stream.str(); };\n";
     output << "    const char* className = \"LimdCWindowClass\";\n";
     output << "    WNDCLASSEXA wc = {};\n";
@@ -1156,16 +1756,71 @@ int main() {
         output << "    std::string g_text" << i << "Value = LimdCToString(" << text.textExpression << ");\n";
         output << "    g_text" << i << "BgBrush = CreateSolidBrush(g_text" << i << "BgColor);\n";
         output << "    g_text" << i << "Font = CreateFontA(-" << text.size
-               << ", 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, "
+               << ", 0, 0, 0, " << (text.bold ? "FW_BOLD" : "FW_NORMAL") << ", FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, "
                << "CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, \"Microsoft YaHei UI\");\n";
-        const std::string textStyle = text.center ? "SS_CENTER" : "SS_LEFT | SS_LEFTNOWORDWRAP";
-        output << "    g_text" << i << " = CreateWindowExA(0, \"STATIC\", g_text" << i << "Value.c_str(), WS_CHILD | WS_VISIBLE | " << textStyle << ", "
+        const std::string textClass = text.edit ? "EDIT" : "STATIC";
+        const std::string textStyle = text.edit
+            ? (text.center ? "ES_CENTER | ES_MULTILINE | WS_BORDER | WS_VSCROLL" : "ES_LEFT | ES_MULTILINE | WS_BORDER | WS_VSCROLL")
+            : (text.center ? "SS_CENTER" : "SS_LEFT | SS_LEFTNOWORDWRAP");
+        output << "    g_text" << i << " = CreateWindowExA(0, \"" << textClass << "\", g_text" << i << "Value.c_str(), WS_CHILD | WS_VISIBLE | " << textStyle << ", "
                << text.x << ", " << text.y << ", " << text.width << ", " << text.height << ", " << window.name
                << ", NULL, hInstance, NULL);\n";
         output << "    SendMessageA(g_text" << i << ", WM_SETFONT, reinterpret_cast<WPARAM>(g_text" << i << "Font), TRUE);\n";
     }
 
+    for (std::size_t i = 0; i < program.cmds.size(); ++i) {
+        const CmdSpec& cmd = program.cmds[i];
+        output << "    g_cmd" << i << "Font = CreateFontA(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, FIXED_PITCH | FF_MODERN, \"Consolas\");\n";
+        output << "    g_cmd" << i << "BgBrush = CreateSolidBrush(g_cmd" << i << "BgColor);\n";
+        const std::string cmdReadOnlyStyle = cmd.edit ? "" : " | ES_READONLY";
+        output << "    g_cmd" << i << " = CreateWindowExA(0, \"EDIT\", \"\", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | ES_LEFT | ES_MULTILINE | ES_AUTOVSCROLL" << cmdReadOnlyStyle << ", "
+               << cmd.x << ", " << cmd.y << ", " << cmd.width << ", " << cmd.height << ", " << window.name
+               << ", NULL, hInstance, NULL);\n";
+        output << "    SendMessageA(g_cmd" << i << ", WM_SETFONT, reinterpret_cast<WPARAM>(g_cmd" << i << "Font), TRUE);\n";
+        for (const FunctionSpec& function : program.functions) {
+            if (function.name != cmd.runHandler) {
+                continue;
+            }
+            output << "    std::string g_cmd" << i << "Output;\n";
+            for (const std::string& statement : function.cmdOutputStatements) {
+                output << "    g_cmd" << i << "Output += " << statement << ";\n";
+            }
+            output << "    SetWindowTextA(g_cmd" << i << ", g_cmd" << i << "Output.c_str());\n";
+        }
+    }
+
+    for (std::size_t i = 0; i < program.checkBoxes.size(); ++i) {
+        const CheckBoxSpec& checkBox = program.checkBoxes[i];
+        output << "    g_checkbox" << i << "Font = CreateFontA(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, \"Microsoft YaHei UI\");\n";
+        output << "    g_checkbox" << i << " = CreateWindowExA(0, \"BUTTON\", " << cppStringLiteral(checkBox.text)
+               << ", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, " << checkBox.x << ", " << checkBox.y << ", " << checkBox.width << ", " << checkBox.height
+               << ", " << window.name << ", NULL, hInstance, NULL);\n";
+        output << "    SendMessageA(g_checkbox" << i << ", WM_SETFONT, reinterpret_cast<WPARAM>(g_checkbox" << i << "Font), TRUE);\n";
+        output << "    SendMessageA(g_checkbox" << i << ", BM_SETCHECK, " << (checkBox.checked ? "BST_CHECKED" : "BST_UNCHECKED") << ", 0);\n";
+    }
+
+    for (std::size_t i = 0; i < program.selects.size(); ++i) {
+        const SelectSpec& select = program.selects[i];
+        output << "    g_select" << i << "Font = CreateFontA(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, \"Microsoft YaHei UI\");\n";
+        output << "    g_select" << i << " = CreateWindowExA(0, \"COMBOBOX\", \"\", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, "
+               << select.x << ", " << select.y << ", " << select.width << ", " << select.height << ", " << window.name << ", NULL, hInstance, NULL);\n";
+        output << "    SendMessageA(g_select" << i << ", WM_SETFONT, reinterpret_cast<WPARAM>(g_select" << i << "Font), TRUE);\n";
+        for (const std::string& item : select.items) {
+            output << "    SendMessageA(g_select" << i << ", CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(" << cppStringLiteral(item) << "));\n";
+        }
+        output << "    SendMessageA(g_select" << i << ", CB_SETCURSEL, " << select.selected << ", 0);\n";
+    }
+
+    for (std::size_t i = 0; i < program.progresses.size(); ++i) {
+        const ProgressSpec& progress = program.progresses[i];
+        output << "    g_progress" << i << " = CreateWindowExA(0, PROGRESS_CLASSA, \"\", WS_CHILD | WS_VISIBLE, "
+               << progress.x << ", " << progress.y << ", " << progress.width << ", " << progress.height << ", " << window.name << ", NULL, hInstance, NULL);\n";
+        output << "    SendMessageA(g_progress" << i << ", PBM_SETRANGE, 0, MAKELPARAM(0, " << progress.max << "));\n";
+        output << "    SendMessageA(g_progress" << i << ", PBM_SETPOS, " << progress.value << ", 0);\n";
+    }
+
     output << "\n";
+    output << "    g_limdCMainWindow = " << window.name << ";\n";
     output << "    ShowWindow(" << window.name << ", SW_SHOWDEFAULT);\n";
     output << "    UpdateWindow(" << window.name << ");\n";
     for (std::size_t i = 0; i < program.lists.size(); ++i) {
@@ -1173,6 +1828,22 @@ int main() {
             output << "    RedrawWindow(" << window.name << ", NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);\n";
             break;
         }
+    }
+    bool hasAfterUiReadyStatement = false;
+    for (const NativeStatement& statement : program.nativeStatements) {
+        if (statement.afterUiReady) {
+            hasAfterUiReadyStatement = true;
+            break;
+        }
+    }
+    if (hasAfterUiReadyStatement) {
+        output << "    std::thread([](){\n";
+        for (const NativeStatement& statement : program.nativeStatements) {
+            if (statement.afterUiReady) {
+                output << "        " << statement.text << "\n";
+            }
+        }
+        output << "    }).detach();\n";
     }
     output << "\n";
     output << "    MSG message = {};\n";
@@ -1261,7 +1932,7 @@ int main(int argc, char** argv) {
         }
         command += " " + quoteArg(generatedPath) + " -o " + quoteArg(args.output);
         if (hasUi) {
-            command += " -lgdi32 -luser32 -mwindows";
+            command += " -lgdi32 -luser32 -lcomctl32 -mwindows";
         }
 
         std::cout << "Generated: " << fs::absolute(generatedPath).string() << '\n';

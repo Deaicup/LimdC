@@ -3,20 +3,21 @@
 #include [C]<stdio.h>
 #include [C++]<bits/stdc++.h>
 
+conc concprogram()=c; //conc用于指定当程序执行到concprogram()时，用多核cpu或某种算法同时执行c:开头的函数的代码，无论逻辑是否有bug，不检查
 fn main(){ 
     new mainwindow=window{
-        .title="LimdC List Test"
-        .h=420
-        .w=520
+        .title="LimdC UI Components Test"
+        .h=560
+        .w=820
     }
 
     new list of mainwindow=testList{
         .title="List Card"
         .title color=#1E3A8A
-        .x=70
-        .y=45
-        .aw=320
-        .ah=58
+        .x=40
+        .y=35
+        .aw=300
+        .ah=54
         .padding=16
         .background color=#F8FAFC
         new button of * = listButtonA{
@@ -44,22 +45,77 @@ fn main(){
         .click=click()
         .corner=circle
     }
-    string txt = "hallo";
+
+    string txt = "Editable text";
     new text=text1{
-        .x=70
-        .y=310
-        .w=320
-        .h=40
-        .text=printf(txt) // or .text=cout<<txt
+        .x=40
+        .y=285
+        .w=300
+        .h=46
+        .text=printf(txt)
         .color=#FFFFFF
         .size=18
         .background color=#111827
         .center=0
+        .bold=1
+        .edit=1
     }
+
+    new cmd of mainwindow=cmd{
+        .x=380
+        .y=35
+        .w=360
+        .h=150
+        .run=printfirst()
+        .text color=#FFFFFF
+        .background color=#000000
+        .edit=1
+    }
+
+    new checkbox of mainwindow=agreeBox{
+        .x=380
+        .y=210
+        .w=220
+        .h=28
+        .text="Enable feature"
+        .checked=1
+    }
+
+    new select of mainwindow=themeSelect{
+        .x=380
+        .y=255
+        .w=220
+        .h=120
+        .items=["Light", "Dark", "System"]
+        .selected=1
+    }
+
+    new progress of mainwindow=loadProgress{
+        .x=380
+        .y=315
+        .w=300
+        .h=24
+        .value=65
+        .max=100
+    }
+    Sleep(1000);
+    concprogram();
 
     return 0;
 }
 
 fn click(){
     listButtonA.'color of text'=#FFEE58;
+}
+
+fn printfirst(){
+    printf("LimdC command output\n");
+    cout<<"checkbox/select/progress ready";
+    *return #cmd mode
+}
+fn c:print1{
+    loadProgress.value=100
+}
+fn c:print2{
+    cmd.*printf("hallo")//用于直接打印文本
 }

@@ -203,3 +203,122 @@
 
 1. **Win32 STATIC 默认样式要显式控制**: 如果不去掉 `SS_CENTER`，即使 DSL 写 `.center=0` 也会继续居中。
 2. **验证生成代码比只看 exe 更直接**: 检查生成的 `CreateWindowExA` 样式能快速确认对齐逻辑。
+
+## 2026-06-27 — 更新 README 并尝试推送
+
+### 经验
+
+1. **README 要随 DSL 语法同步更新**: 新增 list、text、center 等语法后，应补充示例、属性列表和设计约束，方便后续使用。
+2. **PowerShell 5 命令兼容性**: 该环境不支持 `&&`，git 提交等串联命令应使用 `;` 或分步执行。
+3. **推送前确认 main**: 当前分支是 main 时，即使用户要求 push，也应再次确认是否直接推送远端 main。
+
+### 教训
+
+1. **远端 502 不代表本地失败**: `git push` 返回 HTTP 502 后仍需检查 `git status` / `git branch -vv`，确认是否仍 ahead。
+2. **push 失败不要盲目重试**: 如果远端服务返回 502，应报告状态，让用户稍后重试或检查远端服务。
+
+## 2026-06-27 — 支持 text bold 语法
+
+### 经验
+
+1. **简单视觉语法优先落在现有控件上**: `.bold=0/1` 可以直接映射到 Win32 `CreateFontA` 的 `FW_NORMAL` / `FW_BOLD`。
+2. **布尔数字属性复用校验模式**: 和 `.center` 一样，`.bold` 只接受 `0` 或 `1`，便于保持 DSL 一致。
+
+### 教训
+
+1. **用户没有明确新增语法时要先确认或自选小语法**: 如果示例中没有新增内容，可以选择低风险、易验证的新语法实现。
+2. **生成代码验证很关键**: 检查 `CreateFontA` 是否生成 `FW_BOLD` 能直接确认 `.bold=1` 生效。
+
+## 2026-06-28 — 支持 edit text 和 cmd 语法
+
+### 经验
+
+1. **可编辑文本可映射为 EDIT**: `text` 的 `.edit=1` 直接将 Win32 控件从 `STATIC` 切换为 `EDIT`，并复用文字颜色、背景色、字体等已有属性。
+2. **cmd 初版可用只读 EDIT 实现**: `new cmd` 生成黑底绿字、只读多行 EDIT，能快速模拟命令行输出区域。
+3. **cmd 输出函数要有显式标记**: `*return #cmd mode` 用于标记函数输出返回到 cmd，便于和普通点击函数区分。
+4. **字符串转义需要单独解码**: 解析 `printf("hallo\n")` 时要把 `\n` 解码为换行，再交给 `cppStringLiteral` 生成目标 C++ 字符串。
+
+### 教训
+
+1. **函数解析不能只支持 UI action**: 新增 cmd 输出后，函数体内需要同时支持 UI 属性修改、输出语句和特殊返回标记。
+2. **验证输出内容时要检查生成代码**: 先前 `\n` 被错误生成成 `n`，通过检查 `main.generated.cpp` 才能快速发现。
+
+## 2026-06-28 — 修复 resize 和支持 cmd 颜色
+
+### 经验
+
+1. **resize 后要主动重绘父窗口和子控件**: 在 `WM_SIZE` 中调用 `InvalidateRect` 和 `RedrawWindow(... RDW_ALLCHILDREN)`，能避免列表背景重绘后覆盖子按钮导致“消失”。
+2. **cmd 样式应使用 DSL 属性**: `.text color` 和 `.background color` 可直接映射到 `WM_CTLCOLOREDIT` 的 `SetTextColor` / `SetBkColor`。
+3. **示例布局要跟窗口尺寸匹配**: 增大窗口并把 cmd 放在列表右侧，比原先 520 宽窗口里挤在边缘更容易检查效果。
+
+### 教训
+
+1. **手绘列表背景会影响子控件显示**: 父窗口自绘区域和子控件区域重叠时，窗口尺寸变化后必须考虑重绘顺序。
+2. **新增控件画刷需要释放**: cmd 背景画刷从静态局部改为全局句柄后，要在 `WM_DESTROY` 中删除。
+
+## 2026-06-28 — 修复 cmd 颜色并支持 edit
+
+### 经验
+
+1. **EDIT 颜色消息要同时覆盖两种路径**: 只读或不同状态的 EDIT 可能走 `WM_CTLCOLORSTATIC` 或 `WM_CTLCOLOREDIT`，cmd 颜色应在两个分支都处理。
+2. **cmd 可编辑性可复用 `.edit=0/1`**: `.edit=1` 不生成 `ES_READONLY`，`.edit=0` 或不写保留只读命令输出窗口。
+3. **验证样式要检查窗口样式位**: 生成代码中无 `ES_READONLY` 可直接确认 `.edit=1` 生效。
+
+### 教训
+
+1. **只处理 WM_CTLCOLOREDIT 不够**: 对只读 EDIT，Windows 可能不会通过该分支绘制颜色，导致颜色看起来未生效。
+2. **新增布尔属性要保持一致校验**: `.edit` 和 `.center`、`.bold` 一样，只应接受 `0` 或 `1`。
+
+## 2026-06-28 — 新增 checkbox/select/progress 组件
+
+### 经验
+
+1. **简单控件优先映射 Win32 原生类**: `checkbox` 用 `BUTTON + BS_AUTOCHECKBOX`，`select` 用 `COMBOBOX + CBS_DROPDOWNLIST`，可以快速得到可交互控件。
+2. **progress 需要 common controls**: 使用 `PROGRESS_CLASSA` 前要包含 `<commctrl.h>`、调用 `InitCommonControlsEx`，链接时加 `-lcomctl32`。
+3. **数组属性先支持字符串数组即可**: `.items=["Light", "Dark"]` 只解析字符串项，避免一开始引入复杂表达式语法。
+4. **示例应覆盖所有新属性**: 示例中同时写 `.checked`、`.items`、`.selected`、`.value`、`.max`，便于回归测试。
+
+### 教训
+
+1. **新增控件别忘了资源释放**: checkbox/select 生成字体句柄后需要在 `WM_DESTROY` 删除。
+2. **控件依赖库要同步目标编译命令**: 只生成 progress 代码但不链接 `comctl32` 会导致目标编译失败。
+
+## 2026-06-28 — 支持 conc 和 c: 函数组
+
+### 经验
+
+1. **顶层声明要在查找 main 前解析**: `conc concprogram()=c;` 位于 `fn main` 前，应在预处理 include 后、扫描 main 前单独收集。
+2. **组函数语法可复用 FunctionSpec**: `fn c:print1{...}` 通过 `FunctionSpec.group="c"` 和 `name="print1"` 表示，避免新增另一套函数结构。
+3. **UI 动作要按目标控件类型分发**: `loadProgress.value=100` 生成 `PBM_SETPOS`，`cmd.*printf("...")` 生成追加文本逻辑。
+4. **原生语句仍可转发**: `Sleep(1000);` 保持 native statement 转发到生成的 `main()` 中。
+
+### 教训
+
+1. **不要把 conc 当 WM_COMMAND 消息**: `concprogram();` 是普通函数调用，直接生成函数更简单，不需要注册窗口消息 ID。
+2. **函数定义正则要兼容无括号**: 示例使用 `fn c:print1{}`，不能只接受 `fn name(){}`。
+
+## 2026-06-28 — 修复 conc UI 可见性
+
+### 经验
+
+1. **UI 初始化顺序会覆盖早期更新**: `progress.value=100` 如果在控件初始化前执行，会被后续初始值 `65` 覆盖，看起来像 conc 没效果。
+2. **紧挨 conc 调用的等待语句应随 conc 延后**: 示例里的 `Sleep(1000); concprogram();` 需要一起移到 `ShowWindow/UpdateWindow` 后，才能看到延迟后的 UI 更新。
+3. **更新进度后主动刷新控件**: `PBM_SETPOS` 后补 `InvalidateRect`，让显示更稳定。
+
+### 教训
+
+1. **不能只看生成函数是否存在**: 生成了 `concprogram()` 不代表运行时有效，还要检查调用位置和控件初始化顺序。
+2. **改变 nativeStatements 类型后要同步 console 分支**: 从 `std::string` 改为结构体后，console 生成器也需要更新遍历逻辑。
+
+## 2026-06-28 — 修复 conc 阻塞 UI 线程
+
+### 经验
+
+1. **UI 线程不能执行 Sleep 或 join**: `Sleep(1000); concprogram();` 如果在消息循环前同步执行，会让窗口看起来卡死。
+2. **顺序语句要放同一个后台线程**: `Sleep` 和 `concprogram` 不能拆成两个 detached 线程，否则延迟顺序丢失。
+3. **后台线程不要直接操作 Win32 控件**: progress 和 cmd 更新通过 `PostMessageA` 回主窗口线程处理，更稳定。
+
+### 教训
+
+1. **detach 只解决阻塞，不解决线程安全**: 即使 conc 不阻塞 UI，如果 worker 直接 `SendMessage` 操作控件，也可能出现不可预期行为。
+2. **生成代码要检查真实时序**: 只看编译通过不够，还要确认消息循环是否能立即启动。
